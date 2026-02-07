@@ -1,6 +1,7 @@
 package bitset
 
 import (
+	"math/bits"
 	"testing"
 )
 
@@ -27,6 +28,68 @@ func TestCountIntersection(test *testing.T) {
 	next = setA.CountIntersectionTo(setB, int(count+10))
 	if next != count {
 		test.Error("Bad second intersection to +10 counts (to", count+10, "):", next, "should be", count)
+	}
+}
+
+func TestPromoteToBitSet(test *testing.T) {
+	set := NewIntSet()
+	set.Add(2)
+	set.Add(3)
+	set.Add(4)
+	set.Add(5)
+	set.Add(6)
+	if set.vs != nil {
+		test.Error("Promoted while an interval")
+	}
+	set.promoteToBitSet()
+	if set.vs == nil {
+		test.Error("Bad promote to bit set:", set.vs, "should not be nil")
+	}
+	if set.vsStart != 0 {
+		test.Error("Bad promote to bit set:", set.vsStart, "should be 0")
+	}
+	if set.minValue != 2 {
+		test.Error("Bad promote to bit set:", set.minValue, "should be 2")
+	}
+	if set.maxValue != 6 {
+		test.Error("Bad promote to bit set:", set.maxValue, "should be 6")
+	}
+	if set.count != 5 {
+		test.Error("Bad promote to bit set:", set.count, "should be 5")
+	}
+	if bits.OnesCount64(set.vs[0]) != 5 {
+		test.Error("Bad promote to bit set:", bits.OnesCount64(set.vs[0]), "should be 5")
+	}
+}
+
+func TestCountIntersectionIntervals(test *testing.T) {
+	setA := NewIntSetFromInterval(1001, 3000)
+	setB := NewIntSetFromInterval(101, 2013)
+	// intersection is from 1001 to 2013 = 1013
+	count := setA.CountIntersection(setB)
+	if count != 1013 {
+		test.Error("Bad intersection count:", count, "should be 2013")
+	}
+}
+
+func TestCountIntersectionBitSetInterval(test *testing.T) {
+	var count uint
+	setA := NewIntSetFromInterval(1001, 3000)
+	setB := NewIntSet()
+	for j := 101; j < 2013; j += 3 {
+		setB.Add(uint(j))
+		if setA.Contains(uint(j)) {
+			count++
+		}
+	}
+	found := setA.CountIntersection(setB)
+	if found != count {
+		test.Error("Bad intersection count:", found, "should be", count)
+	}
+
+	found = setB.CountIntersection(setA)
+	if found != count {
+		test.Error("Bad intersection count:", found, "should be", count)
 	}
 }
 
