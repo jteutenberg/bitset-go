@@ -66,6 +66,15 @@ func NewIntSetFromInterval(min, max uint) *IntSet {
 	return &set
 }
 
+func (set *IntSet) Clone() *IntSet {
+	if set.vs == nil {
+		return NewIntSetFromInterval(set.minValue, set.maxValue)
+	}
+	clone := IntSet{minValue: set.minValue, maxValue: set.maxValue, vs: make([]uint64, len(set.vs)), vsStart: set.vsStart, count: set.count}
+	copy(clone.vs, set.vs)
+	return &clone
+}
+
 func (set *IntSet) AddInts(values []int) {
 	for _, v := range values {
 		set.Add(uint(v))
@@ -211,19 +220,25 @@ func (set *IntSet) Remove(x uint) {
 		return
 	}
 	if set.vs == nil {
+		needPromote := true
 		if x == set.minValue {
 			set.minValue++
 			set.count--
+			needPromote = false
 		} else if x == set.maxValue {
 			set.maxValue--
 			set.count--
-		} else {
-			set.promoteToBitSet()
+			needPromote = false
 		}
 		if set.minValue > set.maxValue {
 			// empty set
 			set.minValue = math.MaxUint
 			set.maxValue = 0
+			return
+		}
+		if needPromote {
+			set.promoteToBitSet()
+		} else {
 			return
 		}
 	}
@@ -259,7 +274,7 @@ func (set *IntSet) Clear() {
 	//set.start = uint(len(set.vs)) + 1
 }
 
-func (set *IntSet) GetFirstID() (bool, uint) {
+func (set *IntSet) GetFirstValue() (bool, uint) {
 	if set.IsEmpty() {
 		return false, 0
 	}
@@ -302,10 +317,10 @@ func (set *IntSet) CountIntersection(other *IntSet) uint {
 	// 4.  bit set : bit set
 	start := (minV - set.vsStart) >> 6
 	end := (maxV - set.vsStart) >> 6
-	offset := ((minV - other.vsStart) >> 6) - start
+	otherStart := ((minV - other.vsStart) >> 6)
 	count := 0
-	for ; start <= end; start++ {
-		count += bits.OnesCount64(set.vs[start] & other.vs[start+offset])
+	for i := start; i <= end; i++ {
+		count += bits.OnesCount64(set.vs[i] & other.vs[i-start+otherStart])
 	}
 	return uint(count)
 }
@@ -322,10 +337,10 @@ func (set *IntSet) CountIntersectionTo(other *IntSet, maxCount int) uint {
 	minV, maxV := set.intersectMinMax(other)
 	start := (minV - set.vsStart) >> 6
 	end := (maxV - set.vsStart) >> 6
-	offset := ((minV - other.vsStart) >> 6) - start
+	otherStart := ((minV - other.vsStart) >> 6)
 	count := 0
-	for ; start <= end && count < maxCount; start++ {
-		count += bits.OnesCount64(set.vs[start] & other.vs[start-offset])
+	for i := start; i <= end && count < maxCount; i++ {
+		count += bits.OnesCount64(set.vs[i] & other.vs[i-start+otherStart])
 	}
 	return uint(count)
 }
@@ -338,7 +353,14 @@ func (set *IntSet) Intersect(other *IntSet) {
 	minV, maxV := set.intersectMinMax(other)
 	if minV > maxV {
 		if set.vs != nil {
-			// TODO: clear the bits
+			// clear all bits
+			start := (set.minValue - set.vsStart) >> 6
+			end := (set.maxValue - set.vsStart) >> 6
+			for i := start; i <= end; i++ {
+				set.vs[i] = 0
+			}
+			set.count = 0
+			return
 		}
 		set.minValue = math.MaxUint
 		set.maxValue = 0
@@ -352,27 +374,45 @@ func (set *IntSet) Intersect(other *IntSet) {
 			set.count = maxV - minV + 1
 			return
 		}
+		// shrink to the shared interval first
+		set.minValue = minV
+		set.maxValue = maxV
 		set.promoteToBitSet()
-		// TODO: interval : bit set
 	}
-	// TODO: bit set: interval
-	// set some to zero, then mask the edges
-	// similar to what is done when promoting
 
 	start := (minV - set.vsStart) >> 6
 	end := (maxV - set.vsStart) >> 6
-	offset := ((minV - other.vsStart) >> 6) - start
+	otherStart := ((minV - other.vsStart) >> 6)
 	// clear everything up to the new minimum
 	oldStart := (set.minValue - set.vsStart) >> 6
 	oldEnd := (set.maxValue - set.vsStart) >> 6
 	for ; oldStart < start; oldStart++ {
 		set.vs[oldStart] = 0
 	}
+	// and down to the new maximum
 	for ; oldEnd > end; oldEnd-- {
 		set.vs[oldEnd] = 0
 	}
-	for i := start; i <= end; i++ {
-		set.vs[i] &= other.vs[i+offset]
+	if other.vs == nil {
+		// only have to handle the two edges
+		startMask := AllBits << (minV & 0x3F)
+		endMask := AllBits >> (63 - (maxV & 0x3F))
+		if start == end {
+			set.vs[start] = set.vs[start] & startMask & endMask
+		} else {
+			set.vs[start] = set.vs[start] & startMask
+			set.vs[end] = set.vs[end] & endMask
+		}
+		set.count = 0
+	} else {
+		// bit set : bit set intersection
+		for i := start; i <= end; i++ {
+			set.vs[i] &= other.vs[i-start+otherStart]
+		}
+		// update min and max values
+		_, set.minValue = set.GetNextValue(minV - 1)
+		// TODO: update max value. Make a GetPrevID
+		set.count = 0 // unknown
 	}
 }
 
@@ -411,15 +451,32 @@ func (set *IntSet) RemoveAll(other *IntSet) {
 		}
 	}
 	if other.vs == nil {
-		// TODO: remove the interval from the bit set
+		// remove the interval from the bit set
+		start := (minV - set.vsStart) >> 6
+		end := (maxV - set.vsStart) >> 6
+
+		if start == (other.minValue-set.vsStart)>>6 {
+			// remove from the first uint, masked. A small min value removes more
+			set.vs[start] = set.vs[start] & (AllBits >> (63 - (other.minValue & 0x3F)))
+			start++
+		}
+		if end == (other.maxValue-set.vsStart)>>6 {
+			// remove from the last uint
+			set.vs[end] = set.vs[end] & (AllBits << (other.maxValue & 0x3F))
+			end--
+		}
+		for i := start; i <= end; i++ {
+			set.vs[i] = 0
+		}
+		return
 	}
 
 	// find the intersecting indices
 	start := (minV - set.vsStart) >> 6
 	end := (maxV - set.vsStart) >> 6
-	offset := ((minV - other.vsStart) >> 6) - start
+	otherStart := ((minV - other.vsStart) >> 6)
 	for i := start; i <= end; i++ {
-		set.vs[i] &= (^other.vs[i+offset])
+		set.vs[i] &= (^other.vs[i-start+otherStart])
 	}
 	if minV == set.minValue {
 		// TODO: update min
@@ -430,9 +487,6 @@ func (set *IntSet) RemoveAll(other *IntSet) {
 }
 
 func (set *IntSet) AddAll(other *IntSet) {
-	if set.maxValue >= other.maxValue && set.minValue <= other.minValue {
-		return
-	}
 	minV, maxV := set.unionMinMax(other)
 	if minV > maxV {
 		// both are empty
@@ -452,35 +506,72 @@ func (set *IntSet) AddAll(other *IntSet) {
 		// otherwise, promote to a bitset and keep going
 		set.promoteToBitSet()
 	}
-	// TODO: handle adding an interval to bit set
-	// TODO: may need to reallocate
-	// update vsStart if necessary
+	if minV < set.vsStart {
+		// reallocate the vs slice and update vsStart
+		newStart := (minV >> 6)
+		if newStart > 0 {
+			newStart--
+		}
+		newEnd := (maxV >> 6) + 5
+		newVs := make([]uint64, newEnd-newStart+1)
+		copy(newVs[(set.vsStart>>6)-newStart:], set.vs)
+		set.vs = newVs
+		set.vsStart = newStart << 6
+	}
+	if maxV > set.maxValue {
+		// possibly reallocate the vs slice and update maxValue
+		newEnd := (maxV - set.vsStart) >> 6
+		if newEnd >= uint(len(set.vs)) {
+			newVs := make([]uint64, newEnd+5)
+			copy(newVs, set.vs)
+			set.vs = newVs
+		}
+	}
+	if other.vs == nil {
+		// add the interval to the bit set
+		start := (other.minValue - set.vsStart) >> 6
+		end := (other.maxValue - set.vsStart) >> 6
+		startMask := AllBits << (other.minValue & 0x3F)
+		endMask := AllBits >> (63 - (other.maxValue & 0x3F))
+		if start == end {
+			set.vs[start] |= startMask & endMask
+		} else {
+			set.vs[start] |= startMask
+			set.vs[end] |= endMask
+		}
+		for i := start + 1; i < end; i++ {
+			set.vs[i] |= AllBits
+		}
+		return
+	}
 	start := (other.minValue - set.vsStart) >> 6
 	end := (other.maxValue - set.vsStart) >> 6
-	offset := ((other.minValue - other.vsStart) >> 6) - start
+	otherStart := ((other.minValue - other.vsStart) >> 6)
 	if end >= uint(len(set.vs)) {
 		newVs := make([]uint64, end+2)
 		copy(newVs, set.vs)
 		set.vs = newVs
 	}
 	for i := start; i <= end; i++ {
-		set.vs[i] |= other.vs[i+offset]
+		set.vs[i] |= other.vs[i-start+otherStart]
 	}
 	set.maxValue = maxV
 	set.minValue = minV
 }
 
 func (set *IntSet) Union(other *IntSet) *IntSet {
-	// TODO
-	return nil
+	s := set.Clone()
+	s.AddAll(other)
+	return s
 }
 
 func (set *IntSet) Intersection(other *IntSet) *IntSet {
-	// TODO
-	return nil
+	s := set.Clone()
+	s.Intersect(other)
+	return s
 }
 
-func (set *IntSet) GetNextID(x uint) (bool, uint) {
+func (set *IntSet) GetNextValue(x uint) (bool, uint) {
 	x++
 	if x > set.maxValue {
 		return false, 0
@@ -510,20 +601,20 @@ func (set *IntSet) GetNextID(x uint) (bool, uint) {
 	}
 	v := set.vs[index] >> subIndex
 	zs := uint(bits.TrailingZeros64(v))
-	return true, (index << 6) + subIndex + zs
+	return true, (index << 6) + subIndex + zs + set.vsStart
 }
 
 func (set *IntSet) AsInts() []int {
 	//consider inlining the loop to speed this up
 	ids := make([]int, 0, set.count)
-	for ok, id := set.GetFirstID(); ok; ok, id = set.GetNextID(id) {
+	for ok, id := set.GetFirstValue(); ok; ok, id = set.GetNextValue(id) {
 		ids = append(ids, int(id))
 	}
 	return ids
 }
 func (set *IntSet) AsUints() []uint {
 	ids := make([]uint, 0, set.count)
-	for ok, id := set.GetFirstID(); ok; ok, id = set.GetNextID(id) {
+	for ok, id := set.GetFirstValue(); ok; ok, id = set.GetNextValue(id) {
 		ids = append(ids, id)
 	}
 	return ids
@@ -535,7 +626,7 @@ func (set *IntSet) CountMembers() uint {
 	}
 	count := 0
 	start := (set.minValue - set.vsStart) >> 6
-	end := (set.minValue - set.vsStart) >> 6
+	end := (set.maxValue - set.vsStart) >> 6
 	for i := start; i <= end; i++ {
 		count += bits.OnesCount64(set.vs[i])
 	}
@@ -552,7 +643,7 @@ func (set *IntSet) Size() uint {
 func (set *IntSet) String() string {
 	s := "{"
 	first := true
-	for ok, v := set.GetFirstID(); ok; ok, v = set.GetNextID(v) {
+	for ok, v := set.GetFirstValue(); ok; ok, v = set.GetNextValue(v) {
 		if first {
 			first = false
 			s = fmt.Sprint(s, v)

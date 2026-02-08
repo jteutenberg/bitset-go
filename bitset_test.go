@@ -118,6 +118,50 @@ func TestIntersect(test *testing.T) {
 	}
 }
 
+func TestIntersectBitSetInterval(test *testing.T) {
+	setA := NewIntSet()
+	setB := NewIntSetFromInterval(101, 2013)
+	intersection := make([]int, 0, 1000)
+	for i := 1001; i < 3000; i += 5 {
+		setA.Add(uint(i))
+		if setB.Contains(uint(i)) {
+			intersection = append(intersection, i)
+		}
+	}
+	setA.Intersect(setB)
+	for _, j := range intersection {
+		if !setA.Contains(uint(j)) {
+			test.Error("Bad intersection:", setA.String(), "should contain", j)
+			break
+		}
+	}
+	if setA.CountMembers() != uint(len(intersection)) {
+		test.Error("Bad intersection count:", setA.CountMembers(), "should be", len(intersection))
+	}
+}
+
+func TestIntersectIntervalBitSet(test *testing.T) {
+	setA := NewIntSet()
+	setB := NewIntSetFromInterval(101, 2013)
+	intersection := make([]int, 0, 1000)
+	for i := 1001; i < 3000; i += 5 {
+		setA.Add(uint(i))
+		if setB.Contains(uint(i)) {
+			intersection = append(intersection, i)
+		}
+	}
+	setB.Intersect(setA)
+	for _, j := range intersection {
+		if !setB.Contains(uint(j)) {
+			test.Error("Bad intersection:", setB.String(), "should contain", j)
+			break
+		}
+	}
+	if setB.CountMembers() != uint(len(intersection)) {
+		test.Error("Bad intersection count:", setB.CountMembers(), "should be", len(intersection))
+	}
+}
+
 func TestRemoveAll(test *testing.T) {
 	setA := NewIntSet()
 	setB := NewIntSet()
@@ -141,6 +185,25 @@ func TestRemoveAll(test *testing.T) {
 	}
 }
 
+func TestRemoveAllBitSetInterval(test *testing.T) {
+	setA := NewIntSet()
+	setB := NewIntSetFromInterval(101, 2013)
+	count := 0
+	for i := 1001; i < 3000; i += 5 {
+		setA.Add(uint(i))
+		if !setB.Contains(uint(i)) {
+			count++
+		}
+	}
+	setA.RemoveAll(setB)
+	if setA.CountIntersection(setB) != 0 {
+		test.Error("Bad intersection count:", setA.CountIntersection(setB), "should be 0")
+	}
+	if setA.CountMembers() != uint(count) {
+		test.Error("Bad remaining count:", setA.CountMembers(), "should be", count)
+	}
+}
+
 func TestMultipleAdd(test *testing.T) {
 	set := NewIntSet()
 	for i := 0; i < 1000; i++ {
@@ -149,6 +212,13 @@ func TestMultipleAdd(test *testing.T) {
 	}
 	if set.CountMembers() != 1000 {
 		test.Error("Bad count:", set.CountMembers(), "should be 1000")
+	}
+	set = NewIntSet()
+	for i := 0; i < 1000; i += 2 {
+		set.Add(uint(i))
+	}
+	if set.CountMembers() != 500 {
+		test.Error("Bad count:", set.CountMembers(), "should be 500")
 	}
 }
 
@@ -211,7 +281,7 @@ func TestIter(test *testing.T) {
 	}
 
 	i := 0
-	for ok, id := set.GetFirstID(); ok; ok, id = set.GetNextID(id) {
+	for ok, id := set.GetFirstValue(); ok; ok, id = set.GetNextValue(id) {
 		if id != uint(members[i]) {
 			test.Error("Bad ID:", id, "should be", members[i])
 		}
@@ -233,6 +303,56 @@ func TestAddAll(test *testing.T) {
 	for j := 101; j < 2013; j += 3 {
 		setB.Add(uint(j))
 		if !setA.Contains(uint(j)) {
+			members = append(members, j)
+		}
+	}
+	setA.AddAll(setB)
+	for _, m := range members {
+		if !setA.Contains(uint(m)) {
+			test.Error("Bad members:", setA.String(), "should contain", m)
+			break
+		}
+	}
+	if setA.CountMembers() != uint(len(members)) {
+		test.Error("Bad count:", setA.CountMembers(), "should be", len(members))
+	}
+}
+
+func TestAddAllIntervalBitSet(test *testing.T) {
+	setA := NewIntSetFromInterval(1001, 1100)
+	setB := NewIntSet()
+	members := make([]int, 0, 1000)
+	for j := 101; j < 2013; j += 3 {
+		setB.Add(uint(j))
+		members = append(members, j)
+	}
+	for j := 1001; j < 1100; j++ {
+		if !setB.Contains(uint(j)) {
+			members = append(members, j)
+		}
+	}
+	setB.AddAll(setA)
+	for _, m := range members {
+		if !setB.Contains(uint(m)) {
+			test.Error("Bad members:", setB.String(), "should contain", m)
+			break
+		}
+	}
+	if setB.CountMembers() != uint(len(members)) {
+		test.Error("Bad count:", setB.CountMembers(), "should be", len(members))
+	}
+}
+
+func TestAddAllBitSetInterval(test *testing.T) {
+	setA := NewIntSetFromInterval(1001, 1100)
+	setB := NewIntSet()
+	members := make([]int, 0, 1000)
+	for j := 101; j < 2013; j += 3 {
+		setB.Add(uint(j))
+		members = append(members, j)
+	}
+	for j := 1001; j < 1100; j++ {
+		if !setB.Contains(uint(j)) {
 			members = append(members, j)
 		}
 	}
