@@ -117,6 +117,14 @@ func (set *IntSet) Contains(x uint) bool {
 	return (set.vs[index] & (Bit << subIndex)) != 0
 }
 
+func (set *IntSet) IsSubsetOf(other *IntSet) bool {
+	return set.CountIntersection(other) == set.CountMembers()
+}
+
+func (set *IntSet) IsDisjointFrom(other *IntSet) bool {
+	return set.CountIntersectionTo(other, 1) == 0
+}
+
 func (set *IntSet) promoteToBitSet() {
 	if set.vs != nil {
 		return
