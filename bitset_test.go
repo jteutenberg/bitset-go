@@ -54,8 +54,8 @@ func TestPromoteToBitSet(test *testing.T) {
 	if set.maxValue != 6 {
 		test.Error("Bad promote to bit set:", set.maxValue, "should be 6")
 	}
-	if set.count != 5 {
-		test.Error("Bad promote to bit set:", set.count, "should be 5")
+	if set.Size() != 5 {
+		test.Error("Bad promote to bit set:", set.Size(), "should be 5")
 	}
 	if bits.OnesCount64(set.vs[0]) != 5 {
 		test.Error("Bad promote to bit set:", bits.OnesCount64(set.vs[0]), "should be 5")
@@ -106,15 +106,15 @@ func TestIntersect(test *testing.T) {
 			intersection = append(intersection, j)
 		}
 	}
-	setA.Intersect(setB)
+	setA.Intersection(setB)
 	for _, j := range intersection {
 		if !setA.Contains(uint(j)) {
 			test.Error("Bad intersection:", setA.String(), "should contain", j)
 			break
 		}
 	}
-	if setA.CountMembers() != uint(len(intersection)) {
-		test.Error("Bad intersection count:", setA.CountMembers(), "should be", len(intersection))
+	if setA.Size() != uint(len(intersection)) {
+		test.Error("Bad intersection count:", setA.Size(), "should be", len(intersection))
 	}
 }
 
@@ -128,15 +128,15 @@ func TestIntersectBitSetInterval(test *testing.T) {
 			intersection = append(intersection, i)
 		}
 	}
-	setA.Intersect(setB)
+	setA.Intersection(setB)
 	for _, j := range intersection {
 		if !setA.Contains(uint(j)) {
 			test.Error("Bad intersection:", setA.String(), "should contain", j)
 			break
 		}
 	}
-	if setA.CountMembers() != uint(len(intersection)) {
-		test.Error("Bad intersection count:", setA.CountMembers(), "should be", len(intersection))
+	if setA.Size() != uint(len(intersection)) {
+		test.Error("Bad intersection count:", setA.Size(), "should be", len(intersection))
 	}
 }
 
@@ -150,15 +150,15 @@ func TestIntersectIntervalBitSet(test *testing.T) {
 			intersection = append(intersection, i)
 		}
 	}
-	setB.Intersect(setA)
+	setB.Intersection(setA)
 	for _, j := range intersection {
 		if !setB.Contains(uint(j)) {
 			test.Error("Bad intersection:", setB.String(), "should contain", j)
 			break
 		}
 	}
-	if setB.CountMembers() != uint(len(intersection)) {
-		test.Error("Bad intersection count:", setB.CountMembers(), "should be", len(intersection))
+	if setB.Size() != uint(len(intersection)) {
+		test.Error("Bad intersection count:", setB.Size(), "should be", len(intersection))
 	}
 }
 
@@ -176,12 +176,12 @@ func TestRemoveAll(test *testing.T) {
 			count--
 		}
 	}
-	setA.RemoveAll(setB)
+	setA.Difference(setB)
 	if setA.CountIntersection(setB) != 0 {
 		test.Error("Bad intersection count:", setA.CountIntersection(setB), "should be 0")
 	}
-	if setA.CountMembers() != uint(count) {
-		test.Error("Bad remaining count:", setA.CountMembers(), "should be", count)
+	if setA.Size() != uint(count) {
+		test.Error("Bad remaining count:", setA.Size(), "should be", count)
 	}
 }
 
@@ -195,30 +195,29 @@ func TestRemoveAllBitSetInterval(test *testing.T) {
 			count++
 		}
 	}
-	setA.RemoveAll(setB)
+	setA.Difference(setB)
 	if setA.CountIntersection(setB) != 0 {
 		test.Error("Bad intersection count:", setA.CountIntersection(setB), "should be 0")
 	}
-	if setA.CountMembers() != uint(count) {
-		test.Error("Bad remaining count:", setA.CountMembers(), "should be", count)
+	if setA.Size() != uint(count) {
+		test.Error("Bad remaining count:", setA.Size(), "should be", count)
 	}
 }
-
 func TestMultipleAdd(test *testing.T) {
 	set := NewIntSet()
 	for i := 0; i < 1000; i++ {
 		set.Add(uint(i))
 		set.Add(uint(i))
 	}
-	if set.CountMembers() != 1000 {
-		test.Error("Bad count:", set.CountMembers(), "should be 1000")
+	if set.Size() != 1000 {
+		test.Error("Bad count:", set.Size(), "should be 1000")
 	}
 	set = NewIntSet()
 	for i := 0; i < 1000; i += 2 {
 		set.Add(uint(i))
 	}
-	if set.CountMembers() != 500 {
-		test.Error("Bad count:", set.CountMembers(), "should be 500")
+	if set.Size() != 500 {
+		test.Error("Bad count:", set.Size(), "should be 500")
 	}
 }
 
@@ -230,8 +229,8 @@ func TestRemove(test *testing.T) {
 	for i := 250; i < 750; i++ {
 		set.Remove(uint(i))
 	}
-	if set.CountMembers() != 500 {
-		test.Error("Bad count:", set.CountMembers(), "should be 500")
+	if set.Size() != 500 {
+		test.Error("Bad count:", set.Size(), "should be 500")
 	}
 }
 
@@ -244,8 +243,8 @@ func TestMultipleRemove(test *testing.T) {
 		set.Remove(uint(i))
 		set.Remove(uint(i))
 	}
-	if set.CountMembers() != 500 {
-		test.Error("Bad count:", set.CountMembers(), "should be 500")
+	if set.Size() != 500 {
+		test.Error("Bad count:", set.Size(), "should be 500")
 	}
 }
 
@@ -306,15 +305,15 @@ func TestAddAll(test *testing.T) {
 			members = append(members, j)
 		}
 	}
-	setA.AddAll(setB)
+	setA.Union(setB)
 	for _, m := range members {
 		if !setA.Contains(uint(m)) {
 			test.Error("Bad members:", setA.String(), "should contain", m)
 			break
 		}
 	}
-	if setA.CountMembers() != uint(len(members)) {
-		test.Error("Bad count:", setA.CountMembers(), "should be", len(members))
+	if setA.Size() != uint(len(members)) {
+		test.Error("Bad count:", setA.Size(), "should be", len(members))
 	}
 }
 
@@ -331,15 +330,15 @@ func TestAddAllIntervalBitSet(test *testing.T) {
 			members = append(members, j)
 		}
 	}
-	setB.AddAll(setA)
+	setB.Union(setA)
 	for _, m := range members {
 		if !setB.Contains(uint(m)) {
 			test.Error("Bad members:", setB.String(), "should contain", m)
 			break
 		}
 	}
-	if setB.CountMembers() != uint(len(members)) {
-		test.Error("Bad count:", setB.CountMembers(), "should be", len(members))
+	if setB.Size() != uint(len(members)) {
+		test.Error("Bad count:", setB.Size(), "should be", len(members))
 	}
 }
 
@@ -356,14 +355,14 @@ func TestAddAllBitSetInterval(test *testing.T) {
 			members = append(members, j)
 		}
 	}
-	setA.AddAll(setB)
+	setA.Union(setB)
 	for _, m := range members {
 		if !setA.Contains(uint(m)) {
 			test.Error("Bad members:", setA.String(), "should contain", m)
 			break
 		}
 	}
-	if setA.CountMembers() != uint(len(members)) {
-		test.Error("Bad count:", setA.CountMembers(), "should be", len(members))
+	if setA.Size() != uint(len(members)) {
+		test.Error("Bad count:", setA.Size(), "should be", len(members))
 	}
 }

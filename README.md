@@ -20,3 +20,60 @@ When an operation on a set splits its interval, its representation is switched t
 Note that a bitset-backed set is never reverted to an interval representation, even if it has returned to containing a contiguous series of values.
 
 The code manages all variations of interval-interval, interval-bitset, and bitset-interval operations.
+
+# Usage
+
+## Available set operations
+
+### Single element operations
+
+`Add(uint)`
+
+`Remove(uint)`
+
+`Contains(uint) bool`
+
+### Binary set operators
+
+`Union(*IntSet)`
+
+`Intersection(*IntSet)`
+
+`Difference(*IntSet)`
+
+`SymmetricDifference(*IntSet)`
+
+`IsSubsetOf(*IntSet) bool`
+
+`IsDisjointFrom(*IntSet) bool`
+
+`CountIntersection(*IntSet) uint`
+
+`CountIntersectionTo(*IntSet, uint) uint`
+
+### Iteration
+
+`GetFirstValue() (uint, bool)`
+
+`GetNextValue(uint) (uint, bool)`
+
+`GetPrevValue(uint) (uint, bool)`
+
+### Other operators
+
+`AsInts() []int`
+
+`AsUints() []uint`
+
+`Clear()`
+
+`Clone() *IntSet`
+
+`IsEmpty() bool`
+
+`Size() uint`
+
+`String() string`
+
+
+

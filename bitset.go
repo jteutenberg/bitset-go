@@ -19,16 +19,17 @@ type IntSet struct {
 	vs      []uint64 // nil for intervals
 	vsStart uint     //value offset, a multiple of 64
 
-	count uint //size is no greater than this
+	cardinalityInvalidated bool
+	cardinality            uint
 }
 
 func NewIntSet() *IntSet {
-	set := IntSet{minValue: math.MaxUint, maxValue: 0, vs: nil, vsStart: 0, count: 0}
+	set := IntSet{minValue: math.MaxUint, maxValue: 0, vs: nil, vsStart: 0, cardinalityInvalidated: false, cardinality: 0}
 	return &set
 }
 
 func NewIntSetCapacity(capacity int) *IntSet {
-	set := IntSet{minValue: math.MaxUint, maxValue: 0, vs: make([]uint64, capacity/64+1), vsStart: 0, count: 0}
+	set := IntSet{minValue: math.MaxUint, maxValue: 0, vs: make([]uint64, capacity/64+1), vsStart: 0, cardinalityInvalidated: false, cardinality: 0}
 	return &set
 }
 
@@ -39,9 +40,11 @@ func NewIntSetFromInts(values []int) *IntSet {
 			max = v
 		}
 	}
-	set := IntSet{minValue: math.MaxUint, maxValue: 0, vs: make([]uint64, max/64+1), vsStart: 0, count: 0}
+	set := IntSet{minValue: math.MaxUint, maxValue: 0, vs: make([]uint64, max/64+1), vsStart: 0, cardinalityInvalidated: false, cardinality: 0}
 	s := &set
-	s.AddInts(values)
+	for _, v := range values {
+		s.Add(uint(v))
+	}
 	return s
 }
 
@@ -53,7 +56,7 @@ func NewIntSetFromUInts(values []uint) *IntSet {
 		}
 	}
 
-	set := IntSet{minValue: math.MaxUint, maxValue: 0, vs: make([]uint64, max/64+1), vsStart: 0, count: 0}
+	set := IntSet{minValue: math.MaxUint, maxValue: 0, vs: make([]uint64, max/64+1), vsStart: 0, cardinalityInvalidated: false, cardinality: 0}
 	s := &set
 	for _, v := range values {
 		s.Add(v)
@@ -62,7 +65,7 @@ func NewIntSetFromUInts(values []uint) *IntSet {
 }
 
 func NewIntSetFromInterval(min, max uint) *IntSet {
-	set := IntSet{minValue: min, maxValue: max, vs: nil, vsStart: 0, count: max - min + 1}
+	set := IntSet{minValue: min, maxValue: max, vs: nil, vsStart: 0, cardinalityInvalidated: false, cardinality: max - min + 1}
 	return &set
 }
 
@@ -70,14 +73,37 @@ func (set *IntSet) Clone() *IntSet {
 	if set.vs == nil {
 		return NewIntSetFromInterval(set.minValue, set.maxValue)
 	}
-	clone := IntSet{minValue: set.minValue, maxValue: set.maxValue, vs: make([]uint64, len(set.vs)), vsStart: set.vsStart, count: set.count}
+	clone := IntSet{minValue: set.minValue, maxValue: set.maxValue, vs: make([]uint64, len(set.vs)), vsStart: set.vsStart, cardinalityInvalidated: set.cardinalityInvalidated, cardinality: set.cardinality}
 	copy(clone.vs, set.vs)
 	return &clone
 }
 
-func (set *IntSet) AddInts(values []int) {
-	for _, v := range values {
-		set.Add(uint(v))
+func (set *IntSet) promoteToBitSet() {
+	if set.vs != nil {
+		return
+	}
+	// start from one uint before the min value, avoid underflow
+	var lowestValue uint
+	if set.minValue >= 64 {
+		lowestValue = set.minValue - 64
+	}
+	// round to the beginning of the uint
+	set.vsStart = ((lowestValue) >> 6) << 6
+	start := (set.minValue - set.vsStart) >> 6
+	end := (set.maxValue - set.vsStart) >> 6
+	set.vs = make([]uint64, end-start+5)
+	// set all values between start and end
+	for i := start + 1; i < end; i++ {
+		set.vs[i] = AllBits
+	}
+	// now handle the start and end
+	startMask := AllBits << (set.minValue & 0x3F)
+	endMask := AllBits >> (63 - (set.maxValue & 0x3F))
+	if start == end {
+		set.vs[start] = startMask & endMask
+	} else {
+		set.vs[start] = startMask
+		set.vs[end] = endMask
 	}
 }
 
@@ -117,65 +143,28 @@ func (set *IntSet) Contains(x uint) bool {
 	return (set.vs[index] & (Bit << subIndex)) != 0
 }
 
-func (set *IntSet) IsSubsetOf(other *IntSet) bool {
-	return set.CountIntersection(other) == set.CountMembers()
-}
-
-func (set *IntSet) IsDisjointFrom(other *IntSet) bool {
-	return set.CountIntersectionTo(other, 1) == 0
-}
-
-func (set *IntSet) promoteToBitSet() {
-	if set.vs != nil {
-		return
-	}
-	// start from one uint before the min value, avoid underflow
-	var lowestValue uint
-	if set.minValue >= 64 {
-		lowestValue = set.minValue - 64
-	}
-	// round to the beginning of the uint
-	set.vsStart = ((lowestValue) >> 6) << 6
-	start := (set.minValue - set.vsStart) >> 6
-	end := (set.maxValue - set.vsStart) >> 6
-	set.vs = make([]uint64, end-start+5)
-	// set all values between start and end
-	for i := start + 1; i < end; i++ {
-		set.vs[i] = AllBits
-	}
-	// now handle the start and end
-	startMask := AllBits << (set.minValue & 0x3F)
-	endMask := AllBits >> (63 - (set.maxValue & 0x3F))
-	if start == end {
-		set.vs[start] = startMask & endMask
-	} else {
-		set.vs[start] = startMask
-		set.vs[end] = endMask
-	}
-}
-
-func (set *IntSet) Add(x uint) {
+func (set *IntSet) Add(x uint) *IntSet {
 	// test for extending an interval
 	if set.vs == nil {
 		// test for adding to an empty interval
-		if set.minValue > set.maxValue {
+		if set.IsEmpty() {
 			set.minValue = x
 			set.maxValue = x
-			set.count = 1
-			return
+			set.cardinality = 1
+			return set
 		}
 		if x == set.minValue-1 {
 			set.minValue = x
-			set.count++
-			return
+			set.cardinality++
+			return set
 		}
 		if x == set.maxValue+1 {
 			set.maxValue = x
-			set.count++
-			return
+			set.cardinality++
+			return set
 		}
 		if x >= set.minValue && x <= set.maxValue {
-			return // already in the interval
+			return set // already in the interval
 		}
 		// otherwise, promote to a bitset and keep going
 		set.promoteToBitSet()
@@ -194,11 +183,11 @@ func (set *IntSet) Add(x uint) {
 			index = (x - set.vsStart) >> 6
 		}
 		set.vs[index] |= bit
-		set.count++
+		set.cardinality++
 		if x > set.maxValue {
 			set.maxValue = x
 		}
-		return
+		return set
 	}
 
 	if x > set.maxValue {
@@ -211,43 +200,43 @@ func (set *IntSet) Add(x uint) {
 		}
 		// a fresh uint to write to
 		set.vs[index] |= bit
-		set.count++
-		return
+		set.cardinality++
+		return set
 	}
 
 	old := set.vs[index]
 	if (old & bit) != 0 { //already exists
-		return
+		return set
 	}
 	set.vs[index] = old | bit
-	set.count++
+	set.cardinality++
+	return set
 }
 
-func (set *IntSet) Remove(x uint) {
+func (set *IntSet) Remove(x uint) *IntSet {
 	if x < set.minValue || x > set.maxValue {
-		return
+		return set
 	}
 	if set.vs == nil {
 		needPromote := true
 		if x == set.minValue {
 			set.minValue++
-			set.count--
+			set.cardinality--
 			needPromote = false
 		} else if x == set.maxValue {
 			set.maxValue--
-			set.count--
+			set.cardinality--
 			needPromote = false
 		}
-		if set.minValue > set.maxValue {
-			// empty set
+		if set.IsEmpty() {
 			set.minValue = math.MaxUint
 			set.maxValue = 0
-			return
+			return set
 		}
 		if needPromote {
 			set.promoteToBitSet()
 		} else {
-			return
+			return set
 		}
 	}
 
@@ -256,30 +245,39 @@ func (set *IntSet) Remove(x uint) {
 	bit := Bit << subIndex
 	old := set.vs[index]
 	if (old & bit) == 0 {
-		return //nothing to remove
+		return set //nothing to remove
 	}
 	set.vs[index] ^= bit
-	set.count--
+	set.cardinality--
+	return set
+}
+
+func (set *IntSet) IsSubsetOf(other *IntSet) bool {
+	return set.CountIntersection(other) == set.Size()
+}
+
+func (set *IntSet) IsDisjointFrom(other *IntSet) bool {
+	return set.CountIntersectionTo(other, 1) == 0
 }
 
 func (set *IntSet) IsEmpty() bool {
 	return set.minValue > set.maxValue
 }
 
-func (set *IntSet) Clear() {
+func (set *IntSet) Clear() *IntSet {
 	set.minValue = math.MaxUint
 	set.maxValue = 0
-	set.count = 0
+	set.cardinality = 0
+	set.cardinalityInvalidated = false
 	if set.vs == nil {
-		return
+		return set
 	}
 	start := (set.minValue - set.vsStart) >> 6
 	end := (set.maxValue - set.vsStart) >> 6
 	for ; start <= end; start++ {
 		set.vs[start] = 0
 	}
-	//set.end = 0
-	//set.start = uint(len(set.vs)) + 1
+	return set
 }
 
 func (set *IntSet) GetFirstValue() (bool, uint) {
@@ -287,6 +285,78 @@ func (set *IntSet) GetFirstValue() (bool, uint) {
 		return false, 0
 	}
 	return true, set.minValue
+}
+
+func (set *IntSet) GetNextValue(x uint) (bool, uint) {
+	x++
+	if x > set.maxValue {
+		return false, 0
+	}
+	if x < set.minValue {
+		// skip to the first value
+		x = set.minValue
+	}
+	if set.vs == nil {
+		return true, x
+	}
+	//check for any bit later at this uint
+	index := (x - set.vsStart) >> 6
+	subIndex := x & 0x3F
+	filter := AllBits << subIndex
+	if (filter & set.vs[index]) == 0 {
+		index++
+		subIndex = 0
+	}
+	// then skip any all-zero indices
+	end := (set.maxValue - set.vsStart) >> 6
+	for index <= end && set.vs[index] == 0 {
+		index++
+	}
+	if index > end {
+		return false, 0
+	}
+	v := set.vs[index] >> subIndex
+	zs := uint(bits.TrailingZeros64(v))
+	return true, (index << 6) + subIndex + zs + set.vsStart
+}
+
+func (set *IntSet) GetPrevValue(x uint) (bool, uint) {
+	x--
+	if x < set.minValue {
+		return false, 0
+	}
+	if x > set.maxValue {
+		x = set.maxValue
+	}
+	if set.vs == nil {
+		return true, x
+	}
+	//check for any bit earlier at this uint
+	index := (x - set.vsStart) >> 6
+	subIndex := x & 0x3F
+	filter := ^(AllBits << (subIndex + 1))
+	if (filter & set.vs[index]) == 0 {
+		index--
+		subIndex = 0
+	}
+	// then skip any all-zero indices
+	end := (set.minValue - set.vsStart) >> 6
+	for index > end && set.vs[index] == 0 {
+		index--
+	}
+	// take care with avoiding underflow
+	if set.vs[index] == 0 {
+		if index == end {
+			return false, 0
+		}
+		index--
+	}
+	if index < end {
+		return false, 0
+	}
+	v := set.vs[index] >> subIndex
+	zs := uint(bits.TrailingZeros64(v))
+	return true, (index << 6) + subIndex - zs + set.vsStart
 }
 
 func (set *IntSet) CountIntersection(other *IntSet) uint {
@@ -357,7 +427,7 @@ func (set *IntSet) CountIntersectionTo(other *IntSet, maxCount int) uint {
  * Remove values from set so that it only contains
  * values that are also in other
  **/
-func (set *IntSet) Intersect(other *IntSet) {
+func (set *IntSet) Intersection(other *IntSet) *IntSet {
 	minV, maxV := set.intersectMinMax(other)
 	if minV > maxV {
 		if set.vs != nil {
@@ -367,20 +437,21 @@ func (set *IntSet) Intersect(other *IntSet) {
 			for i := start; i <= end; i++ {
 				set.vs[i] = 0
 			}
-			set.count = 0
-			return
+			set.cardinality = 0
+			set.cardinalityInvalidated = false
+			return set
 		}
 		set.minValue = math.MaxUint
 		set.maxValue = 0
-		set.count = 0
-		return
+		set.cardinality = 0
+		return set
 	}
 	if set.vs == nil {
 		if other.vs == nil {
 			set.minValue = minV
 			set.maxValue = maxV
-			set.count = maxV - minV + 1
-			return
+			set.cardinality = maxV - minV + 1
+			return set
 		}
 		// shrink to the shared interval first
 		set.minValue = minV
@@ -411,7 +482,8 @@ func (set *IntSet) Intersect(other *IntSet) {
 			set.vs[start] = set.vs[start] & startMask
 			set.vs[end] = set.vs[end] & endMask
 		}
-		set.count = 0
+		set.cardinality = 0
+		set.cardinalityInvalidated = false
 	} else {
 		// bit set : bit set intersection
 		for i := start; i <= end; i++ {
@@ -420,39 +492,51 @@ func (set *IntSet) Intersect(other *IntSet) {
 		// update min and max values
 		_, set.minValue = set.GetNextValue(minV - 1)
 		// TODO: update max value. Make a GetPrevID
-		set.count = 0 // unknown
+		set.cardinality = 0 // unknown
+		set.cardinalityInvalidated = true
 	}
+	return set
 }
 
-func (set *IntSet) RemoveAll(other *IntSet) {
+// The union less the intersection
+func (set *IntSet) SymmetricDifference(other *IntSet) *IntSet {
+	if set.minValue > other.maxValue || set.maxValue < other.minValue {
+		// no intersection, so return the union
+		return set.Union(other)
+	}
+	intersection := set.Clone().Intersection(other)
+	return set.Union(other).Difference(intersection)
+}
+
+func (set *IntSet) Difference(other *IntSet) *IntSet {
 	minV, maxV := set.intersectMinMax(other)
 	if minV > maxV {
-		return // no intersection
+		return set // no intersection
 	}
 	if set.vs == nil {
 		if other.vs == nil {
 			// check for shrinking interval
 			if other.maxValue <= set.maxValue && other.minValue <= set.minValue {
 				set.minValue = other.maxValue + 1
-				if set.minValue > set.maxValue {
+				if set.IsEmpty() {
 					set.minValue = math.MaxUint
 					set.maxValue = 0
-					set.count = 0
-					return
+					set.cardinality = 0
+					return set
 				}
-				set.count = set.maxValue - set.minValue + 1
-				return
+				set.cardinality = set.maxValue - set.minValue + 1
+				return set
 			}
 			if other.maxValue >= set.maxValue && other.minValue >= set.minValue {
 				set.maxValue = other.minValue - 1
-				if set.minValue > set.maxValue {
+				if set.IsEmpty() {
 					set.minValue = math.MaxUint
 					set.maxValue = 0
-					set.count = 0
-					return
+					set.cardinality = 0
+					return set
 				}
-				set.count = set.maxValue - set.minValue + 1
-				return
+				set.cardinality = set.maxValue - set.minValue + 1
+				return set
 			}
 			// must be split in two then, so promote and continue
 			set.promoteToBitSet()
@@ -476,7 +560,8 @@ func (set *IntSet) RemoveAll(other *IntSet) {
 		for i := start; i <= end; i++ {
 			set.vs[i] = 0
 		}
-		return
+		set.cardinalityInvalidated = true
+		return set
 	}
 
 	// find the intersecting indices
@@ -492,24 +577,25 @@ func (set *IntSet) RemoveAll(other *IntSet) {
 	if maxV == set.maxValue {
 		// TODO: update max
 	}
+	return set
 }
 
-func (set *IntSet) AddAll(other *IntSet) {
+func (set *IntSet) Union(other *IntSet) *IntSet {
 	minV, maxV := set.unionMinMax(other)
 	if minV > maxV {
 		// both are empty
-		return
+		return set
 	}
 	if set.vs == nil {
 		if maxV == set.maxValue && minV == set.minValue {
 			// nothing added
-			return
+			return set
 		}
 		if other.vs == nil {
 			set.maxValue = maxV
 			set.minValue = minV
-			set.count = maxV - minV + 1
-			return
+			set.cardinality = maxV - minV + 1
+			return set
 		}
 		// otherwise, promote to a bitset and keep going
 		set.promoteToBitSet()
@@ -550,7 +636,7 @@ func (set *IntSet) AddAll(other *IntSet) {
 		for i := start + 1; i < end; i++ {
 			set.vs[i] |= AllBits
 		}
-		return
+		return set
 	}
 	start := (other.minValue - set.vsStart) >> 6
 	end := (other.maxValue - set.vsStart) >> 6
@@ -565,72 +651,28 @@ func (set *IntSet) AddAll(other *IntSet) {
 	}
 	set.maxValue = maxV
 	set.minValue = minV
-}
-
-func (set *IntSet) Union(other *IntSet) *IntSet {
-	s := set.Clone()
-	s.AddAll(other)
-	return s
-}
-
-func (set *IntSet) Intersection(other *IntSet) *IntSet {
-	s := set.Clone()
-	s.Intersect(other)
-	return s
-}
-
-func (set *IntSet) GetNextValue(x uint) (bool, uint) {
-	x++
-	if x > set.maxValue {
-		return false, 0
-	}
-	if x < set.minValue {
-		// skip to the first value
-		x = set.minValue
-	}
-	if set.vs == nil {
-		return true, x
-	}
-	//check for any bit later at this uint
-	index := (x - set.vsStart) >> 6
-	subIndex := x & 0x3F
-	filter := AllBits << subIndex
-	if (filter & set.vs[index]) == 0 {
-		index++
-		subIndex = 0
-	}
-	// then skip any all-zero indices
-	end := (set.maxValue - set.vsStart) >> 6
-	for index <= end && set.vs[index] == 0 {
-		index++
-	}
-	if index > end {
-		return false, 0
-	}
-	v := set.vs[index] >> subIndex
-	zs := uint(bits.TrailingZeros64(v))
-	return true, (index << 6) + subIndex + zs + set.vsStart
+	return set
 }
 
 func (set *IntSet) AsInts() []int {
 	//consider inlining the loop to speed this up
-	ids := make([]int, 0, set.count)
+	ids := make([]int, 0, set.Size())
 	for ok, id := set.GetFirstValue(); ok; ok, id = set.GetNextValue(id) {
 		ids = append(ids, int(id))
 	}
 	return ids
 }
 func (set *IntSet) AsUints() []uint {
-	ids := make([]uint, 0, set.count)
+	ids := make([]uint, 0, set.Size())
 	for ok, id := set.GetFirstValue(); ok; ok, id = set.GetNextValue(id) {
 		ids = append(ids, id)
 	}
 	return ids
 }
 
-func (set *IntSet) CountMembers() uint {
+func (set *IntSet) countMembers() uint {
 	if set.vs == nil {
-		return set.count
+		return set.cardinality
 	}
 	count := 0
 	start := (set.minValue - set.vsStart) >> 6
@@ -638,14 +680,18 @@ func (set *IntSet) CountMembers() uint {
 	for i := start; i <= end; i++ {
 		count += bits.OnesCount64(set.vs[i])
 	}
-	set.count = uint(count)
-	return set.count
+	set.cardinality = uint(count)
+	set.cardinalityInvalidated = false
+	return set.cardinality
 }
 
 // Size gets an upper bound on the size of this set. After a call to CountMembers this value
 // is accurate until elements are removed.
 func (set *IntSet) Size() uint {
-	return set.count
+	if set.cardinalityInvalidated {
+		set.countMembers()
+	}
+	return set.cardinality
 }
 
 func (set *IntSet) String() string {
