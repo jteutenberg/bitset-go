@@ -287,6 +287,13 @@ func (set *IntSet) GetFirstValue() (bool, uint) {
 	return true, set.minValue
 }
 
+func (set *IntSet) GetLastValue() (bool, uint) {
+	if set.IsEmpty() {
+		return false, 0
+	}
+	return true, set.maxValue
+}
+
 func (set *IntSet) GetNextValue(x uint) (bool, uint) {
 	x++
 	if x > set.maxValue {
@@ -337,7 +344,7 @@ func (set *IntSet) GetPrevValue(x uint) (bool, uint) {
 	filter := ^(AllBits << (subIndex + 1))
 	if (filter & set.vs[index]) == 0 {
 		index--
-		subIndex = 0
+		subIndex = 63
 	}
 	// then skip any all-zero indices
 	end := (set.minValue - set.vsStart) >> 6
@@ -354,8 +361,10 @@ func (set *IntSet) GetPrevValue(x uint) (bool, uint) {
 	if index < end {
 		return false, 0
 	}
-	v := set.vs[index] >> subIndex
-	zs := uint(bits.TrailingZeros64(v))
+	// shuffle the bit in question to the left end
+	v := set.vs[index] << (63 - subIndex)
+	// any remaining zeros need to be removed from the value too
+	zs := uint(bits.LeadingZeros64(v))
 	return true, (index << 6) + subIndex - zs + set.vsStart
 }
 
@@ -695,9 +704,22 @@ func (set *IntSet) Size() uint {
 }
 
 func (set *IntSet) String() string {
+	// any empty set
+	if set.IsEmpty() {
+		return "{}"
+	}
 	s := "{"
+	// longer intervals, print as a range
+	if set.vs == nil && set.maxValue-set.minValue > 10 {
+		return fmt.Sprint(s, set.minValue, "..", set.maxValue, "}")
+	}
 	first := true
+	count := 0
 	for ok, v := set.GetFirstValue(); ok; ok, v = set.GetNextValue(v) {
+		if count > 20 {
+			s = fmt.Sprint(s, "...", set.maxValue)
+			break
+		}
 		if first {
 			first = false
 			s = fmt.Sprint(s, v)

@@ -291,6 +291,35 @@ func TestIter(test *testing.T) {
 	}
 }
 
+func TestReverseIter(test *testing.T) {
+	set := NewIntSet()
+	members := make([]int, 0, 1000)
+	for i := 200; i < 1000; i += 3 {
+		set.Add(uint(i))
+		members = append(members, i)
+	}
+
+	_, first := set.GetFirstValue()
+	if first != uint(members[0]) {
+		test.Error("Bad first value:", first, "should be", members[0])
+	}
+	_, last := set.GetLastValue()
+	if last != uint(members[len(members)-1]) {
+		test.Error("Bad last value:", last, "should be", members[len(members)-1])
+	}
+
+	i := len(members) - 1
+	for ok, id := set.GetLastValue(); ok; ok, id = set.GetPrevValue(id) {
+		if id != uint(members[i]) {
+			test.Error("Bad ID:", id, "should be", members[i], "at index", i)
+		}
+		i--
+	}
+	if i != -1 {
+		test.Error("Bad count:", i, "should be", -1)
+	}
+}
+
 func TestAddAll(test *testing.T) {
 	setA := NewIntSet()
 	setB := NewIntSet()
